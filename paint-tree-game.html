@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>ぬって森に</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body { width:100%; height:100%; overflow:hidden; overscroll-behavior:none; }
+  body {
+    background:#0e1512;
+    font-family:-apple-system, BlinkMacSystemFont, "Hiragino Sans", sans-serif;
+    -webkit-user-select:none; user-select:none;
+    -webkit-tap-highlight-color:transparent;
+  }
+  #game { display:block; width:100%; height:100%; touch-action:none; }
+  #hud {
+    position:fixed; top:calc(env(safe-area-inset-top) + 12px); left:16px; right:16px;
+    color:#dff5e6; font-size:18px; font-weight:700; letter-spacing:.02em;
+    text-shadow:0 1px 3px rgba(0,0,0,.6); pointer-events:none;
+    display:flex; align-items:center; justify-content:space-between;
+  }
+  .overlay {
+    position:fixed; inset:0; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; gap:10px;
+    color:#eafff0; text-align:center; padding:24px;
+    background:radial-gradient(ellipse at center, rgba(20,40,30,.4), rgba(8,14,11,.82));
+    transition:opacity .45s;
+  }
+  .overlay h1 { font-size:28px; letter-spacing:.05em; }
+  .overlay p { font-size:15px; opacity:.9; line-height:1.7; }
+  .overlay .btn {
+    margin-top:14px; padding:12px 28px; border-radius:999px;
+    background:#3f9d47; color:#fff; font-size:16px; font-weight:700;
+  }
+  #intro { pointer-events:none; }
+  #over { display:none; }
+  .hide { opacity:0 !important; pointer-events:none !important; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="hud"><span id="hp"></span><span id="tc"></span></div>
+
+<div id="intro" class="overlay">
+  <h1>ぬって森に</h1>
+  <p>敵を指でなぞって塗りつぶすと木に変わります<br>
+  でも残った敵は木を切り倒しにきます</p>
+  <p style="font-size:13px;opacity:.6;">敵を全部ぬって森にしたらクリア！<br>画面をタッチしてスタート</p>
+</div>
+
+<div id="over" class="overlay">
+  <h1>ゲームオーバー</h1>
+  <p id="score"></p>
+  <div class="btn">もう一度</div>
+</div>
+
+<script>
+(function(){
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const hpEl = document.getElementById('hp');
+  const tcEl = document.getElementById('tc');
+  const intro = document.getElementById('intro');
+  const over = document.getElementById('over');
+  const scoreEl = document.getElementById('score');
+
+  const MAX_HP = 5;
+  const TREE_HP = 3;
+  const BRUSH = 34;
+  const START_TREES = 4;   // 最初から生えている木
+  const ENEMY_COUNT = 14;  // このステージの敵の総数（全部塗ればクリア）
+
+  // ---- difficulty (残った敵ほど時間経過でジワジワ手強くなる) ----
+  // level() ~0 at start, ~1 near 90s, keeps creeping up slowly afterwards.
+  const level        = () => elapsed / 90;
+  const speedMul     = () => 1 + level() * 1.3;                           // wander/spawn speed
+  const chaseSpeed   = () => 46 + level() * 40;                           // 46 → faster chase
+  const chopInterval = () => Math.max(0.4, 0.8 - level() * 0.35);         // chops trees faster
+
+  let W = 0, H = 0, DPR = 1;
+  function resize(){
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    W = window.innerWidth; H = window.innerHeight;
+    canvas.width = W * DPR; canvas.height = H * DPR;
+    canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  const rand = (a, b) => a + Math.random() * (b - a);
+
+  let enemies, trees, particles, planted, hp, elapsed, state, flash, shakeMag;
+
+  function reset(){
+    enemies = []; trees = []; particles = [];
+    planted = 0; hp = MAX_HP; elapsed = 0;
+    state = 'playing'; flash = 0; shakeMag = 0;
+    for (let i = 0; i < START_TREES; i++) addTree();
+    for (let i = 0; i < ENEMY_COUNT; i++) spawnEnemy();
+    updateHud();
+  }
+
+  function addTree(){
+    const r = rand(24, 34);
+    trees.push({
+      x: rand(r + 30, W - r - 30), y: rand(r + 100, H - r - 30),
+      r, hp: TREE_HP, maxHp: TREE_HP,
+      grow: 1, sway: rand(0, 6.28), shake: 0, falling: false
+    });
+  }
+
+  function updateHud(){
+    hpEl.textContent = '❤️'.repeat(hp) + '🤍'.repeat(MAX_HP - hp);
+    tcEl.textContent = '👾 ' + enemies.length;
+  }
+
+  function spawnEnemy(){
+    const r = rand(24, 34);
+    const ang = rand(0, Math.PI * 2), sp = rand(12, 26) * speedMul();
+    enemies.push({
+      x: rand(r + 20, W - r - 20),
+      y: rand(r + 90, H - r - 30),
+      r, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp,
+      paint: 0, wob: rand(0, Math.PI * 2), steer: rand(0.4, 1),
+      hue: rand(255, 285), target: null, chop: 0, lean: 1
+    });
+  }
+
+  // ---- painting ----
+  let painting = false, px = 0, py = 0;
+  function paintAt(x, y){
+    for (const e of enemies){
+      const d = Math.hypot(e.x - x, e.y - y);
+      if (d < e.r + BRUSH){
+        e.paint = Math.min(1, e.paint + (1 - d / (e.r + BRUSH)) * 0.06 + 0.015);
+        if (Math.random() < 0.5) splat(x + rand(-8, 8), y + rand(-8, 8));
+      }
+    }
+  }
+  function splat(x, y){
+    particles.push({ x, y, vx: rand(-30, 30), vy: rand(-40, -10),
+      r: rand(3, 7), life: 1, type: 'paint', g: rand(80, 140) });
+  }
+  function leafBurst(x, y){
+    for (let i = 0; i < 14; i++){
+      const a = rand(0, 6.28), s = rand(30, 120);
+      particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 20,
+        r: rand(4, 8), life: 1, type: 'leaf', g: rand(60, 120), rot: rand(0, 6.28) });
+    }
+  }
+  function woodChips(x, y, dir){
+    for (let i = 0; i < 6; i++){
+      particles.push({ x, y, vx: rand(20, 90) * dir, vy: rand(-70, -20),
+        r: rand(2, 5), life: 1, type: 'chip', g: rand(140, 200) });
+    }
+  }
+
+  function getPos(e){
+    const r = canvas.getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top };
+  }
+  canvas.addEventListener('pointerdown', e => {
+    if (state !== 'playing') return;
+    painting = true; intro.classList.add('hide');
+    const p = getPos(e); px = p.x; py = p.y; paintAt(px, py);
+  });
+  canvas.addEventListener('pointermove', e => {
+    if (!painting || state !== 'playing') return;
+    const p = getPos(e);
+    const steps = Math.max(1, Math.floor(Math.hypot(p.x - px, p.y - py) / 10));
+    for (let i = 1; i <= steps; i++)
+      paintAt(px + (p.x - px) * i / steps, py + (p.y - py) * i / steps);
+    px = p.x; py = p.y;
+  });
+  const stop = () => { painting = false; };
+  window.addEventListener('pointerup', stop);
+  window.addEventListener('pointercancel', stop);
+
+  over.addEventListener('pointerdown', e => {
+    e.stopPropagation();
+    over.classList.add('hide');
+    setTimeout(() => { over.style.display = 'none'; over.classList.remove('hide'); reset(); }, 300);
+  });
+
+  function nearestTree(x, y){
+    let best = null, bd = Infinity;
+    for (const t of trees){
+      if (t.falling) continue;
+      const d = Math.hypot(t.x - x, t.y - y);
+      if (d < bd){ bd = d; best = t; }
+    }
+    return best;
+  }
+
+  function gameOver(){
+    state = 'over';
+    over.querySelector('h1').textContent = 'ゲームオーバー';
+    scoreEl.innerHTML = '植えた木の数&nbsp; <b style="font-size:22px">' + planted + '</b>';
+    over.style.display = 'flex';
+  }
+
+  function win(){
+    state = 'over';
+    over.querySelector('h1').textContent = '🎉 クリア！';
+    scoreEl.innerHTML = '森を守った&nbsp; <b style="font-size:22px">' + trees.length +
+      '</b>&nbsp;本の木<br><span style="opacity:.7;font-size:13px">残りライフ ' + hp + '</span>';
+    over.style.display = 'flex';
+  }
+
+  // ---- loop ----
+  let last = performance.now();
+  function loop(now){
+    const dt = Math.min(0.05, (now - last) / 1000); last = now;
+    if (state === 'playing') update(dt);
+    render();
+    requestAnimationFrame(loop);
+  }
+
+  function update(dt){
+    elapsed += dt;
+    if (flash > 0) flash = Math.max(0, flash - dt * 2);
+    if (shakeMag > 0) shakeMag = Math.max(0, shakeMag - dt * 30);
+
+    // enemies
+    for (let i = enemies.length - 1; i >= 0; i--){
+      const e = enemies[i];
+      e.wob += dt * 4;
+
+      if (!e.target || !trees.includes(e.target) || e.target.falling) e.target = nearestTree(e.x, e.y);
+
+      if (e.target){
+        const t = e.target;
+        const dx = t.x - e.x, dy = t.y - e.y, d = Math.hypot(dx, dy) || 1;
+        const reach = e.r + t.r * 0.7;
+        if (d > reach){
+          const sp = chaseSpeed(), k = Math.min(1, dt * 3);
+          e.vx += ((dx / d) * sp - e.vx) * k;
+          e.vy += ((dy / d) * sp - e.vy) * k;
+          e.chop = 0;
+        } else {
+          e.vx *= 0.8; e.vy *= 0.8;
+          e.lean = dx >= 0 ? 1 : -1;
+          e.chop += dt;
+          if (e.chop >= chopInterval()){
+            e.chop = 0; t.hp--; t.shake = 1;
+            woodChips(t.x, t.y + t.r * 0.4, e.lean);
+            if (t.hp <= 0){ t.falling = true; t.fallDir = e.lean; t.fallT = 0; }
+          }
+        }
+      } else {
+        // wander
+        e.vx += rand(-6, 6) * dt * e.steer;
+        e.vy += rand(-6, 6) * dt * e.steer;
+        const sp = Math.hypot(e.vx, e.vy), cap = 40 * speedMul();
+        if (sp > cap){ e.vx = e.vx / sp * cap; e.vy = e.vy / sp * cap; }
+        e.chop = 0;
+      }
+
+      e.x += e.vx * dt; e.y += e.vy * dt;
+      if (e.x < e.r){ e.x = e.r; e.vx *= -1; }
+      if (e.x > W - e.r){ e.x = W - e.r; e.vx *= -1; }
+      if (e.y < e.r + 70){ e.y = e.r + 70; e.vy *= -1; }
+      if (e.y > H - e.r){ e.y = H - e.r; e.vy *= -1; }
+
+      if (e.paint >= 1){
+        trees.push({ x: e.x, y: e.y, r: e.r, hp: TREE_HP, maxHp: TREE_HP,
+          grow: 0, sway: rand(0, 6.28), shake: 0, falling: false });
+        leafBurst(e.x, e.y);
+        planted++; enemies.splice(i, 1);
+        updateHud();
+      }
+    }
+
+    // trees
+    for (let i = trees.length - 1; i >= 0; i--){
+      const t = trees[i];
+      if (t.shake > 0) t.shake = Math.max(0, t.shake - dt * 3);
+      t.sway += dt;
+      if (t.falling){
+        t.fallT += dt;
+        if (t.fallT >= 0.6){
+          trees.splice(i, 1);
+          hp = Math.max(0, hp - 1);
+          flash = 1; shakeMag = 9;
+          updateHud();
+          if (hp <= 0){ gameOver(); return; }
+        }
+      } else if (t.grow < 1){
+        t.grow = Math.min(1, t.grow + dt * 2.5);
+      }
+    }
+
+    // particles
+    for (let i = particles.length - 1; i >= 0; i--){
+      const p = particles[i];
+      p.life -= dt * (p.type === 'leaf' ? 0.8 : 1.6);
+      p.vy += p.g * dt; p.x += p.vx * dt; p.y += p.vy * dt;
+      if (p.rot !== undefined) p.rot += dt * 4;
+      if (p.life <= 0) particles.splice(i, 1);
+    }
+
+    // 敵を全部木にしたらクリア
+    if (enemies.length === 0){ win(); return; }
+  }
+
+  // ---- drawing ----
+  function blob(r, wob){
+    ctx.beginPath();
+    for (let a = 0; a <= 6.283; a += 0.6){
+      const rr = r + Math.sin(a * 3 + wob) * 1.5;
+      const x = Math.cos(a - 1.57) * rr, y = Math.sin(a - 1.57) * rr;
+      if (a === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+  }
+  function circle(x, y, r){ ctx.beginPath(); ctx.arc(x, y, r, 0, 6.28); ctx.fill(); }
+  const easeOut = t => 1 - Math.pow(1 - t, 3);
+
+  function drawEnemy(e){
+    const wob = Math.sin(e.wob) * 2;
+    const chopping = e.chop > 0 || (e.target && !e.target.falling &&
+      Math.hypot(e.target.x - e.x, e.target.y - e.y) <= e.r + e.target.r * 0.7);
+    const lean = chopping ? Math.sin(performance.now() / 70) * 0.18 * e.lean : 0;
+    ctx.save(); ctx.translate(e.x, e.y); ctx.rotate(lean);
+    ctx.fillStyle = 'rgba(0,0,0,.25)';
+    ctx.beginPath(); ctx.ellipse(0, e.r * 0.85, e.r * 0.8, e.r * 0.3, 0, 0, 6.28); ctx.fill();
+    ctx.fillStyle = `hsl(${e.hue},35%,28%)`;
+    blob(e.r, wob); ctx.fill();
+    if (e.paint > 0){
+      ctx.save();
+      ctx.beginPath(); ctx.arc(0, 0, e.r * 1.15 * e.paint, 0, 6.28); ctx.clip();
+      ctx.fillStyle = '#4caf50'; blob(e.r, wob); ctx.fill();
+      ctx.fillStyle = 'rgba(180,240,170,.4)';
+      ctx.beginPath(); ctx.arc(-e.r * 0.3, -e.r * 0.3, e.r * 0.35, 0, 6.28); ctx.fill();
+      ctx.restore();
+    }
+    const ea = 1 - e.paint;
+    if (ea > 0.05){
+      ctx.globalAlpha = ea;
+      ctx.fillStyle = '#fff';
+      circle(-e.r * 0.32, -e.r * 0.15, e.r * 0.2);
+      circle(e.r * 0.32, -e.r * 0.15, e.r * 0.2);
+      ctx.fillStyle = '#111';
+      circle(-e.r * 0.30, -e.r * 0.12, e.r * 0.09);
+      circle(e.r * 0.34, -e.r * 0.12, e.r * 0.09);
+      ctx.globalAlpha = 1;
+    }
+    ctx.restore();
+  }
+
+  function drawTree(t){
+    const g = easeOut(t.grow);
+    let sway = Math.sin(t.sway * 1.5) * 0.05;
+    if (t.shake > 0) sway += Math.sin(performance.now() / 40) * 0.12 * t.shake;
+    let alpha = 1, fall = 0;
+    if (t.falling){ const f = Math.min(1, t.fallT / 0.6); fall = f * 1.4 * (t.fallDir || 1); alpha = 1 - f * 0.9; }
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.translate(t.x, t.y + t.r * 0.9);
+    ctx.scale(g, g); ctx.rotate(sway + fall);
+    ctx.fillStyle = 'rgba(0,0,0,.2)';
+    ctx.beginPath(); ctx.ellipse(0, t.r * 0.1, t.r * 0.7, t.r * 0.22, 0, 0, 6.28); ctx.fill();
+    ctx.fillStyle = '#7a4a25';
+    ctx.fillRect(-t.r * 0.13, -t.r * 0.9, t.r * 0.26, t.r * 0.9);
+    ctx.fillStyle = '#3f9d47';
+    circle(0, -t.r * 1.5, t.r * 0.85);
+    circle(-t.r * 0.6, -t.r * 1.1, t.r * 0.6);
+    circle(t.r * 0.6, -t.r * 1.1, t.r * 0.6);
+    ctx.fillStyle = '#57b85f';
+    circle(-t.r * 0.2, -t.r * 1.7, t.r * 0.5);
+    ctx.restore();
+
+    // damage bar
+    if (!t.falling && t.hp < t.maxHp){
+      const bw = t.r * 1.4, bx = t.x - bw / 2, by = t.y - t.r * 1.9;
+      ctx.fillStyle = 'rgba(0,0,0,.4)'; ctx.fillRect(bx, by, bw, 5);
+      ctx.fillStyle = '#e0533b'; ctx.fillRect(bx, by, bw * (t.hp / t.maxHp), 5);
+    }
+  }
+
+  function render(){
+    ctx.save();
+    if (shakeMag > 0) ctx.translate(rand(-shakeMag, shakeMag), rand(-shakeMag, shakeMag));
+
+    const grd = ctx.createLinearGradient(0, 0, 0, H);
+    grd.addColorStop(0, '#16241c'); grd.addColorStop(1, '#0c130f');
+    ctx.fillStyle = grd; ctx.fillRect(-20, -20, W + 40, H + 40);
+
+    trees.forEach(drawTree);
+    enemies.forEach(drawEnemy);
+
+    for (const p of particles){
+      ctx.globalAlpha = Math.max(0, p.life);
+      if (p.type === 'leaf'){
+        ctx.fillStyle = '#5cc063';
+        ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot || 0);
+        ctx.beginPath(); ctx.ellipse(0, 0, p.r, p.r * 0.6, 0, 0, 6.28); ctx.fill();
+        ctx.restore();
+      } else if (p.type === 'chip'){
+        ctx.fillStyle = '#9a6b3f';
+        ctx.fillRect(p.x - p.r, p.y - p.r * 0.5, p.r * 2, p.r);
+      } else {
+        ctx.fillStyle = '#4caf50';
+        ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 6.28); ctx.fill();
+      }
+    }
+    ctx.globalAlpha = 1;
+
+    if (painting){
+      ctx.strokeStyle = 'rgba(120,220,130,.6)'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(px, py, BRUSH, 0, 6.28); ctx.stroke();
+    }
+    ctx.restore();
+
+    if (flash > 0){
+      ctx.fillStyle = 'rgba(200,40,30,' + (flash * 0.35) + ')';
+      ctx.fillRect(0, 0, W, H);
+    }
+  }
+
+  reset();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
