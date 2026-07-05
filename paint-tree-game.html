@@ -40,13 +40,14 @@
 </head>
 <body>
 <canvas id="game"></canvas>
-<div id="hud"><span id="hp"></span><span id="tc"></span></div>
+<div id="hud"><span id="hp"></span><span id="sc"></span><span id="tc"></span></div>
 
 <div id="intro" class="overlay">
   <h1>ぬって森に</h1>
-  <p>敵を指でなぞって塗りつぶすと木に変わります<br>
-  でも残った敵は木を切り倒しにきます</p>
-  <p style="font-size:13px;opacity:.6;">ウェーブ形式で敵が攻めてくる！<br>切られる前に塗って森を守ろう<br>画面をタッチしてスタート</p>
+  <p>敵を指でなぞって塗ると木に変わる<br>
+  木を<b>タップ</b>すると収穫してスコアに！<br>
+  <span style="font-size:13px;opacity:.75">小さい木は1回・大きい木は10回タップ</span></p>
+  <p style="font-size:13px;opacity:.6;">敵に切られる前に、塗って・収穫しよう<br>画面をタッチしてスタート</p>
 </div>
 
 <div id="over" class="overlay">
@@ -60,6 +61,7 @@
   const canvas = document.getElementById('game');
   const ctx = canvas.getContext('2d');
   const hpEl = document.getElementById('hp');
+  const scEl = document.getElementById('sc');
   const tcEl = document.getElementById('tc');
   const intro = document.getElementById('intro');
   const over = document.getElementById('over');
@@ -135,13 +137,14 @@
 
   const rand = (a, b) => a + Math.random() * (b - a);
   const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+  const tapsFor = r => clamp(Math.round(1 + 9 * (r - 15) / 39), 1, 10); // 小さい木=1 〜 大きい木=10
 
-  let enemies, trees, particles, planted, hp, state, flash, shakeMag;
+  let enemies, trees, particles, planted, score, hp, state, flash, shakeMag;
   let wave, waveState, restTimer, spawnQueue, bannerText, bannerT;
 
   function reset(){
     enemies = []; trees = []; particles = []; spawnQueue = [];
-    planted = 0; hp = MAX_HP; state = 'playing'; flash = 0; shakeMag = 0;
+    planted = 0; score = 0; hp = MAX_HP; state = 'playing'; flash = 0; shakeMag = 0;
     bannerText = ''; bannerT = 0;
     startWave(1);
   }
@@ -196,7 +199,8 @@
 
   function updateHud(){
     hpEl.textContent = '❤️'.repeat(hp) + '🤍'.repeat(MAX_HP - hp);
-    tcEl.textContent = 'WAVE ' + wave + '  👾' + enemies.length;
+    scEl.textContent = '⭐ ' + score;
+    tcEl.textContent = 'WAVE ' + wave;
   }
 
   function spawnEnemy(kind, x, y){
@@ -218,7 +222,7 @@
   }
 
   // ---- painting ----
-  let painting = false, px = 0, py = 0;
+  let painting = false, px = 0, py = 0, downX = 0, downY = 0, moved = false;
   function paintAt(x, y){
     for (const e of enemies){
       const d = Math.hypot(e.x - x, e.y - y);
@@ -252,8 +256,8 @@
   }
   canvas.addEventListener('pointerdown', e => {
     if (state !== 'playing') return;
-    painting = true; intro.classList.add('hide');
-    const p = getPos(e); px = p.x; py = p.y; paintAt(px, py);
+    painting = true; moved = false; intro.classList.add('hide');
+    const p = getPos(e); px = p.x; py = p.y; downX = px; downY = py; paintAt(px, py);
   });
   canvas.addEventListener('pointermove', e => {
     if (!painting || state !== 'playing') return;
@@ -262,8 +266,15 @@
     for (let i = 1; i <= steps; i++)
       paintAt(px + (p.x - px) * i / steps, py + (p.y - py) * i / steps);
     px = p.x; py = p.y;
+    if (Math.hypot(px - downX, py - downY) > 10) moved = true;
   });
-  const stop = () => { painting = false; };
+  const stop = () => {
+    if (painting && !moved && state === 'playing'){   // 動かさずに離したらタップ＝収穫
+      const t = treeAt(px, py);
+      if (t) tapTree(t);
+    }
+    painting = false;
+  };
   window.addEventListener('pointerup', stop);
   window.addEventListener('pointercancel', stop);
 
@@ -289,10 +300,42 @@
   }
   function acquire(e){ return e.roam ? randomTree(null) : nearestTree(e.x, e.y); }
 
+  // タップされた木を探す（指の位置に一番近い木）
+  function treeAt(x, y){
+    let best = null, bd = Infinity;
+    for (const t of trees){
+      if (t.falling) continue;
+      const cx = t.x, cy = t.y - t.r * 0.5;
+      const d = Math.hypot(x - cx, (y - cy) * 0.8);
+      if (d < t.r * 1.7 && d < bd){ bd = d; best = t; }
+    }
+    return best;
+  }
+  function tapTree(t){
+    t.taps++;
+    t.shake = 1;
+    for (let i = 0; i < 3; i++)
+      particles.push({ x: t.x + rand(-t.r * 0.4, t.r * 0.4), y: t.y - t.r * 0.9,
+        vx: rand(-25, 25), vy: rand(-55, -20), r: rand(3, 6), life: 1,
+        type: 'leaf', g: rand(70, 120), rot: rand(0, 6.28) });
+    if (t.taps >= t.tapsNeeded){     // 収穫完了＝枯れてスコアに
+      score += t.tapsNeeded;
+      witherBurst(t.x, t.y - t.r * 0.5, t.tapsNeeded);
+      const idx = trees.indexOf(t); if (idx >= 0) trees.splice(idx, 1);
+      updateHud();
+    }
+  }
+  function witherBurst(x, y, val){
+    for (let i = 0; i < 10; i++)
+      particles.push({ x, y, vx: rand(-60, 60), vy: rand(-70, 10),
+        r: rand(2, 5), life: 1, type: 'chip', g: rand(120, 180) });
+    particles.push({ x, y: y - 6, vx: 0, vy: -34, r: 0, life: 1.2, type: 'score', text: '+' + val });
+  }
+
   function gameOver(){
     state = 'over';
-    scoreEl.innerHTML = 'WAVE&nbsp;<b style="font-size:22px">' + wave + '</b>&nbsp;まで到達<br>' +
-      '<span style="opacity:.75;font-size:13px">植えた木 ' + planted + ' 本</span>';
+    scoreEl.innerHTML = 'スコア&nbsp;<b style="font-size:26px">' + score + '</b><br>' +
+      '<span style="opacity:.75;font-size:13px">WAVE ' + wave + ' / 植えた木 ' + planted + ' 本</span>';
     over.style.display = 'flex';
   }
 
@@ -356,7 +399,8 @@
 
       if (e.paint >= 1){
         trees.push({ x: e.x, y: e.y, r: e.r, hp: TREE_HP, maxHp: TREE_HP,
-          grow: 0, sway: rand(0, 6.28), shake: 0, falling: false });
+          grow: 0, sway: rand(0, 6.28), shake: 0, falling: false,
+          taps: 0, tapsNeeded: tapsFor(e.r) });
         leafBurst(e.x, e.y);
         planted++; enemies.splice(i, 1);
         updateHud();
@@ -385,8 +429,8 @@
     // particles
     for (let i = particles.length - 1; i >= 0; i--){
       const p = particles[i];
-      p.life -= dt * (p.type === 'leaf' ? 0.8 : 1.6);
-      p.vy += p.g * dt; p.x += p.vx * dt; p.y += p.vy * dt;
+      p.life -= dt * (p.type === 'leaf' ? 0.8 : p.type === 'score' ? 0.7 : 1.6);
+      p.vy += (p.g || 0) * dt; p.x += p.vx * dt; p.y += p.vy * dt;
       if (p.rot !== undefined) p.rot += dt * 4;
       if (p.life <= 0) particles.splice(i, 1);
     }
@@ -472,6 +516,12 @@
       ctx.fillStyle = 'rgba(0,0,0,.4)'; ctx.fillRect(bx, by, bw, 5);
       ctx.fillStyle = '#e0533b'; ctx.fillRect(bx, by, bw * Math.max(0, t.hp) / t.maxHp, 5);
     }
+    // harvest (tap) progress bar
+    if (!t.falling && t.taps > 0){
+      const bw = t.r * 1.4, bx = t.x - bw / 2, by = t.y - t.r * 1.9 - 8;
+      ctx.fillStyle = 'rgba(0,0,0,.4)'; ctx.fillRect(bx, by, bw, 5);
+      ctx.fillStyle = '#ffd54a'; ctx.fillRect(bx, by, bw * t.taps / t.tapsNeeded, 5);
+    }
   }
 
   function render(){
@@ -492,6 +542,13 @@
         ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot || 0);
         ctx.beginPath(); ctx.ellipse(0, 0, p.r, p.r * 0.6, 0, 0, 6.28); ctx.fill();
         ctx.restore();
+      } else if (p.type === 'score'){
+        ctx.fillStyle = '#ffd54a';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.font = '800 22px -apple-system, sans-serif';
+        ctx.shadowColor = 'rgba(0,0,0,.5)'; ctx.shadowBlur = 4;
+        ctx.fillText(p.text, p.x, p.y);
+        ctx.shadowBlur = 0;
       } else if (p.type === 'chip'){
         ctx.fillStyle = '#9a6b3f';
         ctx.fillRect(p.x - p.r, p.y - p.r * 0.5, p.r * 2, p.r);
