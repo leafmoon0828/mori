@@ -124,7 +124,7 @@
     for (const e of enemies){
       const d = Math.hypot(e.x - x, e.y - y);
       if (d < e.r + BRUSH){
-        e.paint = Math.min(1, e.paint + (1 - d / (e.r + BRUSH)) * 0.06 + 0.015);
+        e.paint = Math.min(1, e.paint + (1 - d / (e.r + BRUSH)) * 0.038 + 0.009);
         if (Math.random() < 0.5) splat(x + rand(-8, 8), y + rand(-8, 8));
       }
     }
