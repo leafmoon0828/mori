@@ -36,6 +36,15 @@
   #intro { pointer-events:none; }
   #over { display:none; }
   .hide { opacity:0 !important; pointer-events:none !important; }
+  .logo {
+    font-size:clamp(72px, 30vw, 190px); font-weight:900; letter-spacing:.06em; line-height:1;
+    background:linear-gradient(180deg,#c4ffd3,#52c25d 52%,#2b6d34);
+    -webkit-background-clip:text; background-clip:text; color:transparent;
+    filter:drop-shadow(0 6px 20px rgba(0,0,0,.55));
+  }
+  .start { font-size:15px; opacity:.85; margin-top:26px; animation:pulse 1.6s ease-in-out infinite; }
+  .best { font-size:13px; opacity:.6; margin-top:18px; letter-spacing:.08em; }
+  @keyframes pulse { 0%,100%{opacity:.35} 50%{opacity:.95} }
 </style>
 </head>
 <body>
@@ -43,11 +52,9 @@
 <div id="hud"><span id="hp"></span><span id="sc"></span><span id="tc"></span></div>
 
 <div id="intro" class="overlay">
-  <h1>ぬって森に</h1>
-  <p>敵を指でなぞって塗ると木に変わる<br>
-  木を<b>タップ</b>すると収穫してスコアに！<br>
-  <span style="font-size:13px;opacity:.75">小さい木は1回・大きい木は10回タップ</span></p>
-  <p style="font-size:13px;opacity:.6;">敵に切られる前に、塗って・収穫しよう<br>画面をタッチしてスタート</p>
+  <div class="logo">MORI</div>
+  <p class="start">画面をタッチしてスタート</p>
+  <p class="best" id="introBest"></p>
 </div>
 
 <div id="over" class="overlay">
@@ -56,6 +63,26 @@
   <div class="btn">もう一度</div>
 </div>
 
+<!-- ZzFXMicro - Zuper Zmall Zound Zynth v1.3.2 by Frank Force (MIT) : 音を生成するライブラリ -->
+<script>
+'use strict';
+let // ZzFXMicro - Zuper Zmall Zound Zynth - v1.3.2 by Frank Force
+zzfxV=.3,               // volume
+zzfxX=new AudioContext, // audio context
+zzfx=                   // play sound
+(p=1,k=.05,b=220,e=0,r=0,t=.1,q=0,D=1,u=0,y=0,v=0,z=0,l=0,E=0,A=0,F=0,c=0,w=1,m=0,B=0
+,N=0)=>{let M=Math,d=2*M.PI,R=44100,G=u*=500*d/R/R,C=b*=(1-k+2*k*M.random(k=[]))*d/R,
+g=0,H=0,a=0,n=1,I=0,J=0,f=0,h=N<0?-1:1,x=d*h*N*2/R,L=M.cos(x),Z=M.sin,K=Z(x)/4,O=1+K,
+X=-2*L/O,Y=(1-K)/O,P=(1+h*L)/2/O,Q=-(h+L)/O,S=P,T=0,U=0,V=0,W=0;e=R*e+9;m*=R;r*=R;t*=
+R;c*=R;y*=500*d/R**3;A*=d/R;v*=d/R;z*=R;l=R*l|0;p*=zzfxV;for(h=e+m+r+t+c|0;a<h;k[a++]
+=f*p)++J%(100*F|0)||(f=q?1<q?2<q?3<q?4<q?(g/d%1<D/2)*2-1:Z(g**3):M.max(M.min(M.tan(g)
+,1),-1):1-(2*g/d%2+2)%2:1-4*M.abs(M.round(g/d)-g/d):Z(g),f=(l?1-B+B*Z(d*a/l):1)*(4<q?
+f:(f<0?-1:1)*M.abs(f)**D)*(a<e?a/e:a<e+m?1-(a-e)/m*(1-w):a<e+m+r?w:a<h-c?(h-a-c)/t*w:
+0),f=c?f/2+(c>a?0:(a<h-c?1:(h-a)/c)*k[a-c|0]/2/p):f,N?f=W=S*T+Q*(T=U)+P*(U=f)-Y*V-X*(
+V=W):0),x=(b+=u+=y)*M.cos(A*H++),g+=x+x*E*Z(a**5),n&&++n>z&&(b+=v,C+=v,n=0),!l||++I%l
+||(b=C,u=G,n=n||1);X=zzfxX,p=X.createBuffer(1,h,R);p.getChannelData(0).set(k);b=X.
+createBufferSource();b.buffer=p;b.connect(X.destination);b.start()}
+</script>
 <script>
 (function(){
   const canvas = document.getElementById('game');
@@ -66,6 +93,32 @@
   const intro = document.getElementById('intro');
   const over = document.getElementById('over');
   const scoreEl = document.getElementById('score');
+
+  // ---- サウンド (ZzFXで生成) ----
+  let audioOn = false;
+  function audioUnlock(){
+    if (audioOn) return;
+    try { zzfxX.resume && zzfxX.resume(); } catch(e){}
+    audioOn = true;
+  }
+  function sfx(){ if (audioOn){ try { zzfx.apply(null, arguments); } catch(e){} } }
+  const SFX = {
+    start:  () => sfx(.5, .05, 420, .02, .10, .15, 0, 1.4, 0, 0, 180, .06),
+    pop:    () => sfx(.45, .06, 300, .01, .05, .12, 0, 1.6, 0, 0, 180, .05),
+    tick:   () => sfx(.3, .05, 540, 0, .01, .05, 0, 1.3),
+    coin:   () => sfx(.5, .04, 880, .02, .07, .15, 0, 1.7, 0, 0, 540, .05),
+    chop:   () => sfx(.4, .10, 150, .01, .02, .12, 2, 2, -3),
+    damage: () => sfx(.9, .10, 120, .01, .04, .25, 2, 3, -8),
+    wave:   () => sfx(.5, .05, 440, .03, .14, .20, 0, 1.2, 0, 0, 150, .08),
+    clear:  () => sfx(.55, .05, 520, .03, .18, .25, 0, 1.6, 0, 0, 240, .06),
+    over:   () => sfx(.6, .05, 320, .05, .20, .40, 0, 0.7, -6)
+  };
+  let lastTick = 0, lastChop = 0;
+
+  // ---- ハイスコア (localStorage) ----
+  let best = 0;
+  try { best = parseInt(localStorage.getItem('mori_hi')) || 0; } catch(e){}
+  function saveBest(){ try { localStorage.setItem('mori_hi', best); } catch(e){} }
 
   const MAX_HP = 5;
   const TREE_HP = 3;
@@ -172,6 +225,7 @@
     }
     waveState = 'active';
     banner('WAVE ' + w, 1.6);
+    SFX.wave();
     updateHud();
   }
 
@@ -190,6 +244,7 @@
         restTimer = REST_TIME;
         if (wave % 3 === 0 && hp < MAX_HP){ hp++; updateHud(); }
         banner('WAVE ' + wave + ' クリア！', 1.5);
+        SFX.clear();
       }
     } else {
       restTimer -= dt;
@@ -222,15 +277,18 @@
   }
 
   // ---- painting ----
-  let painting = false, px = 0, py = 0, downX = 0, downY = 0, moved = false;
+  const pointers = new Map();   // pointerId -> {x,y,dx,dy,moved} : マルチタッチ対応
   function paintAt(x, y){
+    let hit = false;
     for (const e of enemies){
       const d = Math.hypot(e.x - x, e.y - y);
       if (d < e.r + BRUSH){
         e.paint = Math.min(1, e.paint + ((1 - d / (e.r + BRUSH)) * 0.038 + 0.009) * e.tough);
+        hit = true;
         if (Math.random() < 0.5) splat(x + rand(-8, 8), y + rand(-8, 8));
       }
     }
+    return hit;
   }
   function splat(x, y){
     particles.push({ x, y, vx: rand(-30, 30), vy: rand(-40, -10),
@@ -256,27 +314,39 @@
   }
   canvas.addEventListener('pointerdown', e => {
     if (state !== 'playing') return;
-    painting = true; moved = false; intro.classList.add('hide');
-    const p = getPos(e); px = p.x; py = p.y; downX = px; downY = py; paintAt(px, py);
+    const wasOff = !audioOn;
+    intro.classList.add('hide'); audioUnlock();
+    if (wasOff) SFX.start();
+    const p = getPos(e);
+    pointers.set(e.pointerId, { x: p.x, y: p.y, dx: p.x, dy: p.y, moved: false });
+    paintAt(p.x, p.y);
   });
   canvas.addEventListener('pointermove', e => {
-    if (!painting || state !== 'playing') return;
+    const pt = pointers.get(e.pointerId);
+    if (!pt || state !== 'playing') return;
     const p = getPos(e);
-    const steps = Math.max(1, Math.floor(Math.hypot(p.x - px, p.y - py) / 10));
+    const steps = Math.max(1, Math.floor(Math.hypot(p.x - pt.x, p.y - pt.y) / 10));
+    let hit = false;
     for (let i = 1; i <= steps; i++)
-      paintAt(px + (p.x - px) * i / steps, py + (p.y - py) * i / steps);
-    px = p.x; py = p.y;
-    if (Math.hypot(px - downX, py - downY) > 10) moved = true;
+      if (paintAt(pt.x + (p.x - pt.x) * i / steps, pt.y + (p.y - pt.y) * i / steps)) hit = true;
+    pt.x = p.x; pt.y = p.y;
+    if (Math.hypot(p.x - pt.dx, p.y - pt.dy) > 10) pt.moved = true;
+    if (hit){
+      const now = performance.now();
+      if (now - lastTick > 90){ lastTick = now; SFX.tick(); }
+    }
   });
-  const stop = () => {
-    if (painting && !moved && state === 'playing'){   // 動かさずに離したらタップ＝収穫
-      const t = treeAt(px, py);
+  const endPointer = e => {
+    const pt = pointers.get(e.pointerId);
+    if (!pt) return;
+    if (!pt.moved && state === 'playing'){   // 動かさず離したらタップ＝収穫
+      const t = treeAt(pt.x, pt.y);
       if (t) tapTree(t);
     }
-    painting = false;
+    pointers.delete(e.pointerId);
   };
-  window.addEventListener('pointerup', stop);
-  window.addEventListener('pointercancel', stop);
+  window.addEventListener('pointerup', endPointer);
+  window.addEventListener('pointercancel', endPointer);
 
   over.addEventListener('pointerdown', e => {
     e.stopPropagation();
@@ -314,12 +384,14 @@
   function tapTree(t){
     t.taps++;
     t.shake = 1;
+    SFX.tick();
     for (let i = 0; i < 3; i++)
       particles.push({ x: t.x + rand(-t.r * 0.4, t.r * 0.4), y: t.y - t.r * 0.9,
         vx: rand(-25, 25), vy: rand(-55, -20), r: rand(3, 6), life: 1,
         type: 'leaf', g: rand(70, 120), rot: rand(0, 6.28) });
     if (t.taps >= t.tapsNeeded){     // 収穫完了＝枯れてスコアに
       score += t.tapsNeeded;
+      SFX.coin();
       witherBurst(t.x, t.y - t.r * 0.5, t.tapsNeeded);
       const idx = trees.indexOf(t); if (idx >= 0) trees.splice(idx, 1);
       updateHud();
@@ -334,9 +406,13 @@
 
   function gameOver(){
     state = 'over';
+    const rec = score > best;
+    if (rec){ best = score; saveBest(); }
     scoreEl.innerHTML = 'スコア&nbsp;<b style="font-size:26px">' + score + '</b><br>' +
-      '<span style="opacity:.75;font-size:13px">WAVE ' + wave + ' / 植えた木 ' + planted + ' 本</span>';
+      (rec ? '<span style="color:#ffd54a;font-weight:800">🏆 新記録！</span><br>' : '') +
+      '<span style="opacity:.75;font-size:13px">ベスト ' + best + ' ／ WAVE ' + wave + ' ／ 木 ' + planted + ' 本</span>';
     over.style.display = 'flex';
+    SFX.over();
   }
 
   // ---- loop ----
@@ -378,6 +454,7 @@
           if (e.chop >= e.chopEvery){
             e.chop = 0; t.hp -= e.chopMul; t.shake = 1;
             woodChips(t.x, t.y + t.r * 0.4, e.lean, e.chopMul >= 2 ? 10 : 6);
+            const nc = performance.now(); if (nc - lastChop > 110){ lastChop = nc; SFX.chop(); }
             if (t.hp <= 0){ t.falling = true; t.fallDir = e.lean; t.fallT = 0; }
             else if (e.roam) e.target = randomTree(t);   // はやぎり: 一撃で次の木へ
           }
@@ -402,6 +479,7 @@
           grow: 0, sway: rand(0, 6.28), shake: 0, falling: false,
           taps: 0, tapsNeeded: tapsFor(e.r) });
         leafBurst(e.x, e.y);
+        SFX.pop();
         planted++; enemies.splice(i, 1);
         updateHud();
       }
@@ -418,6 +496,7 @@
           trees.splice(i, 1);
           hp = Math.max(0, hp - 1);
           flash = 1; shakeMag = 9;
+          SFX.damage();
           updateHud();
           if (hp <= 0){ gameOver(); return; }
         }
@@ -559,10 +638,10 @@
     }
     ctx.globalAlpha = 1;
 
-    if (painting){
+    pointers.forEach(pt => {
       ctx.strokeStyle = 'rgba(120,220,130,.6)'; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(px, py, BRUSH, 0, 6.28); ctx.stroke();
-    }
+      ctx.beginPath(); ctx.arc(pt.x, pt.y, BRUSH, 0, 6.28); ctx.stroke();
+    });
     ctx.restore();
 
     // ウェーブ告知バナー
@@ -584,6 +663,8 @@
     }
   }
 
+  const introBestEl = document.getElementById('introBest');
+  if (introBestEl) introBestEl.textContent = best > 0 ? 'BEST ' + best : '';
   reset();
   requestAnimationFrame(loop);
 })();
