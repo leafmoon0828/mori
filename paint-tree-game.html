@@ -46,7 +46,7 @@
   <h1>ぬって森に</h1>
   <p>敵を指でなぞって塗りつぶすと木に変わります<br>
   でも残った敵は木を切り倒しにきます</p>
-  <p style="font-size:13px;opacity:.6;">敵を全部ぬって森にしたらクリア！<br>画面をタッチしてスタート</p>
+  <p style="font-size:13px;opacity:.6;">切られる前に塗って守ろう<br>画面をタッチしてスタート</p>
 </div>
 
 <div id="over" class="overlay">
@@ -68,12 +68,12 @@
   const MAX_HP = 5;
   const TREE_HP = 3;
   const BRUSH = 34;
-  const START_TREES = 4;   // 最初から生えている木
-  const ENEMY_COUNT = 14;  // このステージの敵の総数（全部塗ればクリア）
 
-  // ---- difficulty (残った敵ほど時間経過でジワジワ手強くなる) ----
+  // ---- difficulty (rises with elapsed play time) ----
   // level() ~0 at start, ~1 near 90s, keeps creeping up slowly afterwards.
   const level        = () => elapsed / 90;
+  const maxEnemies   = () => Math.min(30, 8 + Math.floor(elapsed / 8));   // 8 → 30
+  const spawnEvery   = () => Math.max(0.5, 2.5 - elapsed * 0.024);        // 2.5s → 0.5s
   const speedMul     = () => 1 + level() * 1.3;                           // wander/spawn speed
   const chaseSpeed   = () => 46 + level() * 40;                           // 46 → faster chase
   const chopInterval = () => Math.max(0.4, 0.8 - level() * 0.35);         // chops trees faster
@@ -91,29 +91,19 @@
 
   const rand = (a, b) => a + Math.random() * (b - a);
 
-  let enemies, trees, particles, planted, hp, elapsed, state, flash, shakeMag;
+  let enemies, trees, particles, planted, hp, spawnTimer, elapsed, state, flash, shakeMag;
 
   function reset(){
     enemies = []; trees = []; particles = [];
-    planted = 0; hp = MAX_HP; elapsed = 0;
+    planted = 0; hp = MAX_HP; spawnTimer = 0; elapsed = 0;
     state = 'playing'; flash = 0; shakeMag = 0;
-    for (let i = 0; i < START_TREES; i++) addTree();
-    for (let i = 0; i < ENEMY_COUNT; i++) spawnEnemy();
+    for (let i = 0; i < 4; i++) spawnEnemy();
     updateHud();
-  }
-
-  function addTree(){
-    const r = rand(24, 34);
-    trees.push({
-      x: rand(r + 30, W - r - 30), y: rand(r + 100, H - r - 30),
-      r, hp: TREE_HP, maxHp: TREE_HP,
-      grow: 1, sway: rand(0, 6.28), shake: 0, falling: false
-    });
   }
 
   function updateHud(){
     hpEl.textContent = '❤️'.repeat(hp) + '🤍'.repeat(MAX_HP - hp);
-    tcEl.textContent = '👾 ' + enemies.length;
+    tcEl.textContent = '🌳 ' + trees.length;
   }
 
   function spawnEnemy(){
@@ -196,16 +186,7 @@
 
   function gameOver(){
     state = 'over';
-    over.querySelector('h1').textContent = 'ゲームオーバー';
     scoreEl.innerHTML = '植えた木の数&nbsp; <b style="font-size:22px">' + planted + '</b>';
-    over.style.display = 'flex';
-  }
-
-  function win(){
-    state = 'over';
-    over.querySelector('h1').textContent = '🎉 クリア！';
-    scoreEl.innerHTML = '森を守った&nbsp; <b style="font-size:22px">' + trees.length +
-      '</b>&nbsp;本の木<br><span style="opacity:.7;font-size:13px">残りライフ ' + hp + '</span>';
     over.style.display = 'flex';
   }
 
@@ -220,6 +201,8 @@
 
   function update(dt){
     elapsed += dt;
+    spawnTimer += dt;
+    if (spawnTimer > spawnEvery() && enemies.length < maxEnemies()){ spawnTimer = 0; spawnEnemy(); }
     if (flash > 0) flash = Math.max(0, flash - dt * 2);
     if (shakeMag > 0) shakeMag = Math.max(0, shakeMag - dt * 30);
 
@@ -300,9 +283,6 @@
       if (p.rot !== undefined) p.rot += dt * 4;
       if (p.life <= 0) particles.splice(i, 1);
     }
-
-    // 敵を全部木にしたらクリア
-    if (enemies.length === 0){ win(); return; }
   }
 
   // ---- drawing ----
