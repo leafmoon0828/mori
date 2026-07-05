@@ -46,7 +46,7 @@
   <h1>ぬって森に</h1>
   <p>敵を指でなぞって塗りつぶすと木に変わります<br>
   でも残った敵は木を切り倒しにきます</p>
-  <p style="font-size:13px;opacity:.6;">切られる前に塗って守ろう<br>画面をタッチしてスタート</p>
+  <p style="font-size:13px;opacity:.6;">ウェーブ形式で敵が攻めてくる！<br>切られる前に塗って森を守ろう<br>画面をタッチしてスタート</p>
 </div>
 
 <div id="over" class="overlay">
@@ -68,15 +68,59 @@
   const MAX_HP = 5;
   const TREE_HP = 3;
   const BRUSH = 34;
+  const BASE_CHASE = 50;
+  const REST_TIME = 2.6;   // ウェーブ間のインターバル(秒)
 
-  // ---- difficulty (rises with elapsed play time) ----
-  // level() ~0 at start, ~1 near 90s, keeps creeping up slowly afterwards.
-  const level        = () => elapsed / 90;
-  const maxEnemies   = () => 18;    // 最初から一定（時間で増やさない）
-  const spawnEvery   = () => 0.8;   // 最初から一定ペースで絶え間なく湧く
-  const speedMul     = () => 1 + level() * 1.3;                           // wander/spawn speed
-  const chaseSpeed   = () => 46 + level() * 40;                           // 46 → faster chase
-  const chopInterval = () => Math.max(0.4, 0.8 - level() * 0.35);         // chops trees faster
+  // ---- 敵タイプ ----
+  // speed: 速度倍率 / tough: 塗りやすさ(大=塗りやすい, 小=タンク) /
+  // chopMul: 1回で木に与えるダメージ / chopEvery: 木を切る間隔(秒) /
+  // roam: 一撃ごとに別の木へ移る / dash: 突進(加速が鋭い)
+  const KINDS = {
+    grunt:  { r:[24,32], speed:1.00, tough:1.00, chopMul:1, chopEvery:0.80, h:270, s:35, l:30, brow:false, label:'ふつう' },
+    swarm:  { r:[15,19], speed:1.50, tough:1.25, chopMul:1, chopEvery:1.00, h:46,  s:62, l:46, brow:false, label:'むれ' },
+    brute:  { r:[44,54], speed:0.45, tough:0.40, chopMul:2, chopEvery:0.90, h:2,   s:55, l:33, brow:true,  label:'ボス' },
+    runner: { r:[19,24], speed:1.95, tough:1.00, chopMul:1, chopEvery:0.42, h:194, s:55, l:40, brow:false, roam:true, label:'はやぎり' },
+    dasher: { r:[22,28], speed:1.50, tough:1.00, chopMul:2, chopEvery:0.70, h:28,  s:70, l:45, brow:true,  dash:true, label:'とっしん' },
+    warden: { r:[30,38], speed:0.85, tough:0.32, chopMul:1, chopEvery:0.80, h:320, s:46, l:40, brow:true,  label:'かたい' },
+  };
+
+  // ---- 手作りウェーブ (登場順で各タイプを段階的に紹介 & 難易度カーブ) ----
+  // 各グループ: [タイプ, 数, 出現間隔s, 開始遅延s]
+  const WAVES = [
+    [ ['grunt',3,0.45,0] ],                                                   // 1 いきなり3匹
+    [ ['grunt',4,0.45,0] ],                                                   // 2
+    [ ['swarm',7,0.22,0] ],                                                   // 3 小さな群れ
+    [ ['brute',1,0,0] ],                                                      // 4 でかいのが1匹
+    [ ['grunt',4,0.5,0], ['swarm',4,0.25,1.4] ],                             // 5
+    [ ['runner',2,0.9,0], ['grunt',3,0.5,0.6] ],                            // 6 素早い木こり登場
+    [ ['brute',1,0,0], ['grunt',4,0.55,1.0] ],                              // 7
+    [ ['swarm',10,0.18,0], ['runner',2,0.9,2.0] ],                          // 8
+    [ ['dasher',2,1.0,0], ['grunt',4,0.5,0.5] ],                            // 9 突進登場
+    [ ['brute',2,1.2,0], ['swarm',7,0.22,1.0] ],                            // 10
+    [ ['warden',1,0,0], ['grunt',3,0.6,0.6], ['runner',2,0.9,1.6] ],       // 11 かたいの登場
+    [ ['brute',1,0,0], ['dasher',2,0.9,0.8], ['swarm',9,0.18,0], ['runner',2,0.9,2.0] ], // 12 総攻撃
+  ];
+
+  // 12ウェーブ以降は自動生成でスケール
+  const PICKS = [
+    { g:['grunt',3,0.5], pts:2 },
+    { g:['swarm',7,0.2], pts:2 },
+    { g:['runner',2,0.85], pts:3 },
+    { g:['dasher',2,0.85], pts:3 },
+    { g:['brute',1,0], pts:3 },
+    { g:['warden',1,0], pts:3 },
+  ];
+  function genWave(w){
+    let target = 6 + (w - 12) * 1.6, acc = 0;
+    const groups = [];
+    let guard = 0;
+    while (acc < target && guard++ < 40){
+      const p = PICKS[Math.floor(rand(0, PICKS.length))];
+      groups.push([...p.g, rand(0, 2.2)]);
+      acc += p.pts;
+    }
+    return groups;
+  }
 
   let W = 0, H = 0, DPR = 1;
   function resize(){
@@ -90,32 +134,87 @@
   resize();
 
   const rand = (a, b) => a + Math.random() * (b - a);
+  const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
 
-  let enemies, trees, particles, planted, hp, spawnTimer, elapsed, state, flash, shakeMag;
+  let enemies, trees, particles, planted, hp, state, flash, shakeMag;
+  let wave, waveState, restTimer, spawnQueue, bannerText, bannerT;
 
   function reset(){
-    enemies = []; trees = []; particles = [];
-    planted = 0; hp = MAX_HP; spawnTimer = 0; elapsed = 0;
-    state = 'playing'; flash = 0; shakeMag = 0;
-    for (let i = 0; i < 4; i++) spawnEnemy();
+    enemies = []; trees = []; particles = []; spawnQueue = [];
+    planted = 0; hp = MAX_HP; state = 'playing'; flash = 0; shakeMag = 0;
+    bannerText = ''; bannerT = 0;
+    startWave(1);
+  }
+
+  // ---- ウェーブ管理 ----
+  const gSpeed = () => 1 + Math.min(0.5, (wave - 1) * 0.02);  // ウェーブが進むと全体が少し速く
+
+  function banner(text, dur){ bannerText = text; bannerT = dur; }
+
+  function startWave(w){
+    wave = w;
+    const defs = (w <= WAVES.length) ? WAVES[w - 1] : genWave(w);
+    spawnQueue = [];
+    for (const g of defs){
+      const kind = g[0], count = g[1], every = g[2], delay = g[3] || 0;
+      const clustered = (kind === 'swarm');
+      const cx = rand(90, W - 90), cy = rand(120, H - 80);
+      for (let i = 0; i < count; i++){
+        spawnQueue.push({
+          t: delay + i * every, kind,
+          x: clustered ? cx + rand(-55, 55) : null,
+          y: clustered ? cy + rand(-55, 55) : null
+        });
+      }
+    }
+    waveState = 'active';
+    banner('WAVE ' + w, 1.6);
     updateHud();
+  }
+
+  function updateWaves(dt){
+    if (waveState === 'active'){
+      for (let i = spawnQueue.length - 1; i >= 0; i--){
+        spawnQueue[i].t -= dt;
+        if (spawnQueue[i].t <= 0){
+          const s = spawnQueue[i];
+          spawnEnemy(s.kind, s.x, s.y);
+          spawnQueue.splice(i, 1);
+        }
+      }
+      if (spawnQueue.length === 0 && enemies.length === 0){
+        waveState = 'rest';
+        restTimer = REST_TIME;
+        if (wave % 3 === 0 && hp < MAX_HP){ hp++; updateHud(); }
+        banner('WAVE ' + wave + ' クリア！', 1.5);
+      }
+    } else {
+      restTimer -= dt;
+      if (restTimer <= 0) startWave(wave + 1);
+    }
   }
 
   function updateHud(){
     hpEl.textContent = '❤️'.repeat(hp) + '🤍'.repeat(MAX_HP - hp);
-    tcEl.textContent = '🌳 ' + trees.length;
+    tcEl.textContent = 'WAVE ' + wave + '  👾' + enemies.length;
   }
 
-  function spawnEnemy(){
-    const r = rand(24, 34);
-    const ang = rand(0, Math.PI * 2), sp = rand(12, 26) * speedMul();
+  function spawnEnemy(kind, x, y){
+    const K = KINDS[kind] || KINDS.grunt;
+    const r = rand(K.r[0], K.r[1]);
+    const ang = rand(0, Math.PI * 2), sp = rand(8, 18) * K.speed;
     enemies.push({
-      x: rand(r + 20, W - r - 20),
-      y: rand(r + 90, H - r - 30),
+      kind,
+      x: x != null ? clamp(x, r + 10, W - r - 10) : rand(r + 20, W - r - 20),
+      y: y != null ? clamp(y, r + 90, H - r - 30) : rand(r + 90, H - r - 30),
       r, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp,
       paint: 0, wob: rand(0, Math.PI * 2), steer: rand(0.4, 1),
-      hue: rand(255, 285), target: null, chop: 0, lean: 1
+      body: 'hsl(' + K.h + ',' + K.s + '%,' + K.l + '%)',
+      brow: !!K.brow, roam: !!K.roam, dash: !!K.dash,
+      speed: K.speed, tough: K.tough, chopMul: K.chopMul, chopEvery: K.chopEvery,
+      target: null, chop: 0, lean: 1
     });
+    updateHud();
   }
 
   // ---- painting ----
@@ -124,7 +223,7 @@
     for (const e of enemies){
       const d = Math.hypot(e.x - x, e.y - y);
       if (d < e.r + BRUSH){
-        e.paint = Math.min(1, e.paint + (1 - d / (e.r + BRUSH)) * 0.038 + 0.009);
+        e.paint = Math.min(1, e.paint + ((1 - d / (e.r + BRUSH)) * 0.038 + 0.009) * e.tough);
         if (Math.random() < 0.5) splat(x + rand(-8, 8), y + rand(-8, 8));
       }
     }
@@ -140,8 +239,8 @@
         r: rand(4, 8), life: 1, type: 'leaf', g: rand(60, 120), rot: rand(0, 6.28) });
     }
   }
-  function woodChips(x, y, dir){
-    for (let i = 0; i < 6; i++){
+  function woodChips(x, y, dir, n){
+    for (let i = 0; i < (n || 6); i++){
       particles.push({ x, y, vx: rand(20, 90) * dir, vy: rand(-70, -20),
         r: rand(2, 5), life: 1, type: 'chip', g: rand(140, 200) });
     }
@@ -183,10 +282,17 @@
     }
     return best;
   }
+  function randomTree(exclude){
+    let pool = trees.filter(t => !t.falling && t !== exclude);
+    if (!pool.length) pool = trees.filter(t => !t.falling);
+    return pool.length ? pool[Math.floor(rand(0, pool.length))] : null;
+  }
+  function acquire(e){ return e.roam ? randomTree(null) : nearestTree(e.x, e.y); }
 
   function gameOver(){
     state = 'over';
-    scoreEl.innerHTML = '植えた木の数&nbsp; <b style="font-size:22px">' + planted + '</b>';
+    scoreEl.innerHTML = 'WAVE&nbsp;<b style="font-size:22px">' + wave + '</b>&nbsp;まで到達<br>' +
+      '<span style="opacity:.75;font-size:13px">植えた木 ' + planted + ' 本</span>';
     over.style.display = 'flex';
   }
 
@@ -200,9 +306,8 @@
   }
 
   function update(dt){
-    elapsed += dt;
-    spawnTimer += dt;
-    if (spawnTimer > spawnEvery() && enemies.length < maxEnemies()){ spawnTimer = 0; spawnEnemy(); }
+    updateWaves(dt);
+    if (bannerT > 0) bannerT -= dt;
     if (flash > 0) flash = Math.max(0, flash - dt * 2);
     if (shakeMag > 0) shakeMag = Math.max(0, shakeMag - dt * 30);
 
@@ -211,14 +316,15 @@
       const e = enemies[i];
       e.wob += dt * 4;
 
-      if (!e.target || !trees.includes(e.target) || e.target.falling) e.target = nearestTree(e.x, e.y);
+      if (!e.target || !trees.includes(e.target) || e.target.falling) e.target = acquire(e);
 
       if (e.target){
         const t = e.target;
         const dx = t.x - e.x, dy = t.y - e.y, d = Math.hypot(dx, dy) || 1;
         const reach = e.r + t.r * 0.7;
         if (d > reach){
-          const sp = chaseSpeed(), k = Math.min(1, dt * 3);
+          let sp = BASE_CHASE * e.speed * gSpeed(), k = Math.min(1, dt * 3);
+          if (e.dash){ sp *= 1.3; k = Math.min(1, dt * 5); }
           e.vx += ((dx / d) * sp - e.vx) * k;
           e.vy += ((dy / d) * sp - e.vy) * k;
           e.chop = 0;
@@ -226,17 +332,18 @@
           e.vx *= 0.8; e.vy *= 0.8;
           e.lean = dx >= 0 ? 1 : -1;
           e.chop += dt;
-          if (e.chop >= chopInterval()){
-            e.chop = 0; t.hp--; t.shake = 1;
-            woodChips(t.x, t.y + t.r * 0.4, e.lean);
+          if (e.chop >= e.chopEvery){
+            e.chop = 0; t.hp -= e.chopMul; t.shake = 1;
+            woodChips(t.x, t.y + t.r * 0.4, e.lean, e.chopMul >= 2 ? 10 : 6);
             if (t.hp <= 0){ t.falling = true; t.fallDir = e.lean; t.fallT = 0; }
+            else if (e.roam) e.target = randomTree(t);   // はやぎり: 一撃で次の木へ
           }
         }
       } else {
-        // wander
+        // wander (木がまだ無いとき)
         e.vx += rand(-6, 6) * dt * e.steer;
         e.vy += rand(-6, 6) * dt * e.steer;
-        const sp = Math.hypot(e.vx, e.vy), cap = 40 * speedMul();
+        const sp = Math.hypot(e.vx, e.vy), cap = 40 * e.speed;
         if (sp > cap){ e.vx = e.vx / sp * cap; e.vy = e.vy / sp * cap; }
         e.chop = 0;
       }
@@ -306,7 +413,7 @@
     ctx.save(); ctx.translate(e.x, e.y); ctx.rotate(lean);
     ctx.fillStyle = 'rgba(0,0,0,.25)';
     ctx.beginPath(); ctx.ellipse(0, e.r * 0.85, e.r * 0.8, e.r * 0.3, 0, 0, 6.28); ctx.fill();
-    ctx.fillStyle = `hsl(${e.hue},35%,28%)`;
+    ctx.fillStyle = e.body;
     blob(e.r, wob); ctx.fill();
     if (e.paint > 0){
       ctx.save();
@@ -325,6 +432,13 @@
       ctx.fillStyle = '#111';
       circle(-e.r * 0.30, -e.r * 0.12, e.r * 0.09);
       circle(e.r * 0.34, -e.r * 0.12, e.r * 0.09);
+      if (e.brow){
+        ctx.strokeStyle = '#111'; ctx.lineWidth = e.r * 0.11; ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(-e.r * 0.52, -e.r * 0.44); ctx.lineTo(-e.r * 0.14, -e.r * 0.26);
+        ctx.moveTo(e.r * 0.52, -e.r * 0.44);  ctx.lineTo(e.r * 0.14, -e.r * 0.26);
+        ctx.stroke();
+      }
       ctx.globalAlpha = 1;
     }
     ctx.restore();
@@ -356,7 +470,7 @@
     if (!t.falling && t.hp < t.maxHp){
       const bw = t.r * 1.4, bx = t.x - bw / 2, by = t.y - t.r * 1.9;
       ctx.fillStyle = 'rgba(0,0,0,.4)'; ctx.fillRect(bx, by, bw, 5);
-      ctx.fillStyle = '#e0533b'; ctx.fillRect(bx, by, bw * (t.hp / t.maxHp), 5);
+      ctx.fillStyle = '#e0533b'; ctx.fillRect(bx, by, bw * Math.max(0, t.hp) / t.maxHp, 5);
     }
   }
 
@@ -393,6 +507,19 @@
       ctx.beginPath(); ctx.arc(px, py, BRUSH, 0, 6.28); ctx.stroke();
     }
     ctx.restore();
+
+    // ウェーブ告知バナー
+    if (bannerT > 0){
+      const a = Math.min(1, bannerT * 1.6);
+      const cleared = bannerText.indexOf('クリア') >= 0;
+      ctx.globalAlpha = a;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = cleared ? '#8ff0a0' : '#eafff0';
+      ctx.font = '800 ' + Math.min(44, W * 0.1) + 'px -apple-system, sans-serif';
+      ctx.shadowColor = 'rgba(0,0,0,.6)'; ctx.shadowBlur = 8;
+      ctx.fillText(bannerText, W / 2, H * 0.32);
+      ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+    }
 
     if (flash > 0){
       ctx.fillStyle = 'rgba(200,40,30,' + (flash * 0.35) + ')';
